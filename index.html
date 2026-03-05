@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jonerflix</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #000; color: white; }
+    .thumbnail:hover { transform: scale(1.08); box-shadow: 0 20px 40px rgba(0,0,0,0.8); transition: all 0.3s; }
+    .hidden { display: none !important; }
+    .pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <header class="fixed top-0 w-full bg-black/95 backdrop-blur-xl z-50 py-4 px-8 flex justify-between items-center">
+    <h1 class="text-5xl font-black text-red-600">Jonerflix</h1>
+    <div class="flex items-center gap-6">
+      <input id="search" type="text" placeholder="Search..." class="bg-zinc-900 px-5 py-2 rounded-full w-64 focus:outline-none focus:ring-2 focus:ring-red-600">
+      <select id="sort" class="bg-zinc-900 px-4 py-2 rounded text-white focus:outline-none">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+      </select>
+    </div>
+  </header>
+
+  <div id="hero" class="h-screen bg-cover bg-center relative" style="background-image: url('https://via.placeholder.com/1920x1080/111/eee?text=Loading...')">
+    <div class="absolute inset-0 bg-gradient-to-r from-black via-black/70 to-transparent"></div>
+    <div class="absolute bottom-40 left-12 max-w-xl">
+      <p class="text-red-500 font-bold text-xl">NEW ON JONERFLIX</p>
+      <h1 id="heroTitle" class="text-7xl font-black mb-6">Latest Video</h1>
+      <button id="playHero" class="bg-white text-black font-bold px-12 py-4 rounded text-xl hover:bg-gray-200">
+        ▶ PLAY
+      </button>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto px-8 py-16">
+    <h2 class="text-3xl font-bold mb-8">All Videos</h2>
+    <div id="videos" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 mb-10"></div>
+
+    <div id="loading" class="text-center text-gray-400 py-10">Loading...</div>
+
+    <div class="pagination flex justify-center gap-4 flex-wrap">
+      <button id="prev" class="bg-zinc-800 px-6 py-3 rounded font-medium" disabled>← Prev</button>
+      <div id="pageNumbers" class="flex gap-3"></div>
+      <button id="next" class="bg-zinc-800 px-6 py-3 rounded font-medium">Next →</button>
+    </div>
+  </div>
+
+  <div id="modal" class="hidden fixed inset-0 bg-black/95 z-50 flex items-center justify-center">
+    <div class="relative w-full max-w-5xl px-4">
+      <button onclick="closeModal()" class="absolute -top-12 right-4 text-5xl text-white">×</button>
+      <iframe id="player" class="w-full aspect-video rounded-xl" frameborder="0" allowfullscreen></iframe>
+    </div>
+  </div>
+
+  <script>
+    const API_KEY = 'YOUR_API_KEY_HERE'; // ← Your API key
+    const PLAYLIST_ID = 'PLyXgA99hjgi6P4XUE4hTuB358XXn0QqCj';
+    const VIDEOS_PER_PAGE = 12;
+
+    let allVideos = [];
+    let currentPage = 1;
+    let filteredVideos = [];
+
+    async function loadPlaylist() {
+      document.getElementById('loading').style.display = 'block';
+      const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId=${PLAYLIST_ID}&key=${API_KEY}`;
+      
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.items?.length) return showError('No videos found');
+
+        const videoIds = data.items.map(item => item.snippet.resourceId.videoId).join(',');
+
+        // Fetch stats (views + likes) + snippet
+        const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet&id=${videoIds}&key=${API_KEY}`;
+        const statsRes = await fetch(statsUrl);
+        const statsData = await statsRes.json();
+
+        allVideos = statsData.items.map(item => ({
+          id: item.id,
+          title: item.snippet.title,
+          thumb: item.snippet.thumbnails.medium?.url || 'https://via.placeholder.com/320x180',
+          publishedAt: item.snippet.publishedAt,
+          views: Number(item.statistics.viewCount || 0).toLocaleString() + ' views',
+          likes: Number(item.statistics.likeCount || 0).toLocaleString() + ' likes'
+        }));
+
+        sortVideos('newest');
+        filteredVideos = [...allVideos];
+
+        setHero(allVideos[0]);
+        renderPage(currentPage);
+        renderPagination();
+        document.getElementById('loading').style.display = 'none';
+
+      } catch (e) {
+        showError('Failed to load');
+      }
+    }
+
+    function sortVideos(order) {
+      allVideos.sort((a, b) => {
+        const dateA = new Date(a.publishedAt);
+        const dateB = new Date(b.publishedAt);
+        return order === 'newest' ? dateB - dateA : dateA - dateB;
+      });
+    }
+
+    function setHero(video) {
+      document.getElementById('hero').style.backgroundImage = `url(${video.thumb.replace('medium', 'maxres') || video.thumb})`;
+      document.getElementById('heroTitle').textContent = video.title;
+      document.getElementById('playHero').onclick = () => playVideo(video.id);
+    }
+
+    function renderPage(page) {
+      const container = document.getElementById('videos');
+      container.innerHTML = '';
+
+      const start = (page - 1) * VIDEOS_PER_PAGE;
+      const end = start + VIDEOS_PER_PAGE;
+      const pageVideos = filteredVideos.slice(start, end);
+
+      if (pageVideos.length === 0) {
+        container.innerHTML = '<p class="col-span-full text-center text-gray-400">No matches.</p>';
+        return;
+      }
+
+      pageVideos.forEach(video => {
+        const card = document.createElement('div');
+        card.className = 'thumbnail cursor-pointer relative rounded-xl overflow-hidden';
+        card.setAttribute('data-title', video.title.toLowerCase());
+        card.onclick = () => playVideo(video.id);
+
+        card.innerHTML = `
+          <img src="${video.thumb}" class="w-full h-auto">
+          <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3">
+            <p class="text-sm font-medium">${video.title.length > 45 ? video.title.slice(0, 42) + '...' : video.title}</p>
+            <p class="text-xs text-gray-400">${video.views} • ${video.likes}</p>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      document.getElementById('prev').disabled = page === 1;
+      document.getElementById('next').disabled = end >= filteredVideos.length;
+    }
+
+    function renderPagination() {
+      const container = document.getElementById('pageNumbers');
+      container.innerHTML = '';
+
+      const totalPages = Math.ceil(filteredVideos.length / VIDEOS_PER_PAGE);
+      if (totalPages <= 1) return;
+
+      for (let i = 1; i <= totalPages; i++) {
+        const btn = document.createElement('button');
+        btn.className = `px-4 py-2 rounded ${i === currentPage ? 'bg-red-600' : 'bg-zinc-800 hover:bg-zinc-700'}`;
+        btn.textContent = i;
+        btn.onclick = () => {
+          currentPage = i;
+          renderPage(currentPage);
+          updateActivePage();
+        };
+        container.appendChild(btn);
+      }
+    }
+
+    function updateActivePage() {
+      document.querySelectorAll('#pageNumbers button').forEach(btn => {
+        const isActive = parseInt(btn.textContent) === currentPage;
+        btn.classList.toggle('bg-red-600', isActive);
+        btn.classList.toggle('bg-zinc-800', !isActive);
+      });
+    }
+
+    function playVideo(id) {
+      document.getElementById('player').src = `https://www.youtube.com/embed/${id}?autoplay=1`;
+      document.getElementById('modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('player').src = '';
+      document.getElementById('modal').classList.add('hidden');
+    }
+
+    function showError(msg) {
+      document.getElementById('videos').innerHTML = `<p class="col-span-full text-center text-red-500">${msg}</p>`;
+    }
+
+    // Search
+    document.getElementById('search').addEventListener('input', e => {
+      const term = e.target.value.toLowerCase().trim();
+      filteredVideos = allVideos.filter(v => v.title.toLowerCase().includes(term));
+      currentPage = 1;
+      renderPage(currentPage);
+      renderPagination();
+    });
+
+    // Sort
+    document.getElementById('sort').addEventListener('change', e => {
+      sortVideos(e.target.value);
+      filteredVideos = [...allVideos];
+      currentPage = 1;
+      renderPage(currentPage);
+      renderPagination();
+    });
+
+    // Pagination
+    document.getElementById('prev').onclick = () => {
+      if (currentPage > 1) {
+        currentPage--;
+        renderPage(currentPage);
+        updateActivePage();
+      }
+    };
+
+    document.getElementById('next').onclick = () => {
+      if ((currentPage * VIDEOS_PER_PAGE) < filteredVideos.length) {
+        currentPage++;
+        renderPage(currentPage);
+        updateActivePage();
+      }
+    };
+
+    window.onload = loadPlaylist;
+  </script>
+</body>
+</html>
